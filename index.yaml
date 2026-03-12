@@ -3,7 +3,7 @@ entries:
   renovate-operator:
   - apiVersion: v2
     appVersion: 0.0.0-oidc-a97e280
-    created: "2026-03-12T14:03:00.754267066Z"
+    created: "2026-03-12T18:48:40.896367284Z"
     description: Chart to deploy the renovate operator to your cluster
     digest: a25f221be1898c02765e0eef8e7476cc7b27c303fdffb621ddc96eaf70c90652
     home: https://mogenius.com
@@ -30,4 +30,33 @@ entries:
     urls:
     - https://mantoine96.github.io/renovate-operator/renovate-operator-0.0.0-oidc-a97e280.tgz
     version: 0.0.0-oidc-a97e280
-generated: "2026-03-12T14:03:00.7524446Z"
+  - apiVersion: v2
+    appVersion: 0.0.0-oidc-29dc8ba
+    created: "2026-03-12T18:48:40.894686735Z"
+    description: Chart to deploy the renovate operator to your cluster
+    digest: d3a682886087deee93cfd7274ae5f39e2c033abac358d1834624d141d99cbbd5
+    home: https://mogenius.com
+    icon: https://app.mogenius.com/assets/logos/logo-mogenius-signet-neg.svg
+    maintainers:
+    - email: ruediger@mogenius.com
+      name: Rüdiger Küpper @mogenius
+      url: https://mogenius.com
+    - email: lukas@mogenius.com
+      name: Lukas Hankeln @mogenius
+      url: https://mogenius.com
+    - email: bene@mogenius.com
+      name: Benedikt Iltisberger @mogenius
+      url: https://mogenius.com
+    - email: behrang@mogenius.com
+      name: Behrang Alavi @mogenius
+      url: https://mogenius.com
+    name: renovate-operator
+    sources:
+    - https://github.com/mogenius/renovate-operator
+    - https://helm.mogenius.com/public
+    - oci://ghcr.io/mogenius/helm-charts/renovate-operator
+    type: application
+    urls:
+    - https://mantoine96.github.io/renovate-operator/renovate-operator-0.0.0-oidc-29dc8ba.tgz
+    version: 0.0.0-oidc-29dc8ba
+generated: "2026-03-12T18:48:40.892631213Z"
