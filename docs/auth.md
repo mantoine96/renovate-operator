@@ -103,7 +103,23 @@ Create an OAuth App at **GitHub → Settings → Developer settings → OAuth Ap
 https://<your-operator-host>/auth/callback
 ```
 
-The operator requests the `read:user` and `user:email` scopes. On logout, the OAuth token is automatically revoked.
+The operator requests the `read:user`, `user:email`, and `read:org` scopes. The `read:org` scope is required to fetch team memberships for group-based authorization. On logout, the OAuth token is automatically revoked.
+
+### Team-Based Authorization
+
+GitHub team memberships are fetched via the GitHub API (`/user/teams`) and mapped to groups in `org-login/team-slug` format (e.g., `myorg/backend-team`). These groups work identically to OIDC groups for authorization purposes.
+
+You can filter which teams are accepted using the same prefix/pattern mechanism as OIDC:
+
+```yaml
+auth:
+  github:
+    # ... other GitHub settings ...
+    allowedGroupPrefix: "myorg/"                   # Only accept teams from "myorg"
+    allowedGroupPattern: "^myorg/(team-|platform-)" # Only accept teams matching regex
+```
+
+**Note**: The `read:org` scope requires the user to grant access to their organization memberships during the OAuth consent flow. For GitHub organizations with OAuth App access restrictions, the OAuth App must be approved by an organization admin.
 
 ---
 
@@ -157,16 +173,24 @@ spec:
   # ... other fields
 ```
 
-#### OIDC Group Filtering
+#### Group Filtering
 
-Filter which groups from your OIDC provider are accepted:
+Filter which groups from your authentication provider are accepted. This works with both OIDC and GitHub OAuth:
 
+**OIDC:**
 ```yaml
 auth:
   oidc:
-    # ... other OIDC settings ...
     allowedGroupPrefix: "renovate-"              # Only accept groups starting with "renovate-"
     allowedGroupPattern: "^(team-|platform-).*"  # Only accept groups matching regex
+```
+
+**GitHub OAuth:**
+```yaml
+auth:
+  github:
+    allowedGroupPrefix: "myorg/"                 # Only accept teams from "myorg"
+    allowedGroupPattern: "^myorg/team-.*"        # Only accept teams matching regex
 ```
 
 This is useful when your identity provider returns many groups but you only want to use certain ones for authorization.

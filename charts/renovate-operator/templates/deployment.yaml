@@ -168,6 +168,14 @@ spec:
             - name: GITHUB_REDIRECT_URL
               value: {{ $githubRedirectUrl | quote }}
             {{- end }}
+            {{- if .Values.auth.github.allowedGroupPrefix }}
+            - name: GITHUB_ALLOWED_GROUP_PREFIX
+              value: {{ .Values.auth.github.allowedGroupPrefix | quote }}
+            {{- end }}
+            {{- if .Values.auth.github.allowedGroupPattern }}
+            - name: GITHUB_ALLOWED_GROUP_PATTERN
+              value: {{ .Values.auth.github.allowedGroupPattern | quote }}
+            {{- end }}
             {{- end }}
             {{- if or .Values.auth.oidc.enabled .Values.auth.github.enabled }}
             {{- if .Values.auth.defaultAllowedGroups }}

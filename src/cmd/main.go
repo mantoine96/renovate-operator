@@ -207,6 +207,16 @@ func main() {
 			Optional: true,
 			Default:  "",
 		},
+		{
+			Key:      "GITHUB_ALLOWED_GROUP_PREFIX",
+			Optional: true,
+			Default:  "",
+		},
+		{
+			Key:      "GITHUB_ALLOWED_GROUP_PATTERN",
+			Optional: true,
+			Default:  "",
+		},
 	})
 	assert.NoError(err, "failed to initialize config module")
 
@@ -293,14 +303,26 @@ func main() {
 		}
 	} else if githubClientID != "" && githubClientSecret != "" {
 		ghAuth, ghErr := ui.NewGitHubOAuth(ui.GitHubOAuthConfig{
-			ClientID:      githubClientID,
-			ClientSecret:  githubClientSecret,
-			RedirectURL:   config.GetValue("GITHUB_REDIRECT_URL"),
-			SessionSecret: config.GetValue("GITHUB_SESSION_SECRET"),
+			ClientID:            githubClientID,
+			ClientSecret:        githubClientSecret,
+			RedirectURL:         config.GetValue("GITHUB_REDIRECT_URL"),
+			SessionSecret:       config.GetValue("GITHUB_SESSION_SECRET"),
+			AllowedGroupPrefix:  config.GetValue("GITHUB_ALLOWED_GROUP_PREFIX"),
+			AllowedGroupPattern: config.GetValue("GITHUB_ALLOWED_GROUP_PATTERN"),
 		}, ctrl.Log.WithName("github-oauth"))
 		assert.NoError(ghErr, "failed to initialize GitHub OAuth provider")
 		authProvider = ghAuth
 		ctrl.Log.WithName("auth").Info("GitHub OAuth authentication enabled")
+
+		// Log group filtering configuration
+		if config.GetValue("GITHUB_ALLOWED_GROUP_PREFIX") != "" {
+			ctrl.Log.WithName("auth").Info("GitHub group prefix filter enabled",
+				"prefix", config.GetValue("GITHUB_ALLOWED_GROUP_PREFIX"))
+		}
+		if config.GetValue("GITHUB_ALLOWED_GROUP_PATTERN") != "" {
+			ctrl.Log.WithName("auth").Info("GitHub group pattern filter enabled",
+				"pattern", config.GetValue("GITHUB_ALLOWED_GROUP_PATTERN"))
+		}
 	} else {
 		ctrl.Log.WithName("auth").Info("No authentication configured, UI access is unauthenticated")
 	}

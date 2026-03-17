@@ -1,27 +1,38 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
 )
 
+const githubAPIBaseURL = "https://api.github.com"
+
 type GitHubOAuthConfig struct {
-	ClientID      string
-	ClientSecret  string
-	RedirectURL   string
-	SessionSecret string
+	ClientID            string
+	ClientSecret        string
+	RedirectURL         string
+	SessionSecret       string
+	AllowedGroupPrefix  string
+	AllowedGroupPattern string
 }
 
 type GitHubOAuth struct {
 	baseAuth
-	oauth2Config oauth2.Config
-	httpClient   *http.Client
+	oauth2Config      oauth2.Config
+	httpClient        *http.Client
+	groupFilterConfig GroupFilterConfig
+	apiBaseURL        string // defaults to githubAPIBaseURL, overridable for tests
 }
 
 func NewGitHubOAuth(cfg GitHubOAuthConfig, logger logr.Logger) (*GitHubOAuth, error) {
@@ -30,7 +41,7 @@ func NewGitHubOAuth(cfg GitHubOAuthConfig, logger logr.Logger) (*GitHubOAuth, er
 		ClientSecret: cfg.ClientSecret,
 		RedirectURL:  cfg.RedirectURL,
 		Endpoint:     github.Endpoint,
-		Scopes:       []string{"read:user", "user:email"},
+		Scopes:       []string{"read:user", "user:email", "read:org"},
 	}
 
 	key, err := newEncryptionKey(cfg.SessionSecret)
@@ -38,10 +49,32 @@ func NewGitHubOAuth(cfg GitHubOAuthConfig, logger logr.Logger) (*GitHubOAuth, er
 		return nil, err
 	}
 
+	var groupFilterConfig GroupFilterConfig
+	groupFilterConfig.AllowedPrefix = strings.ToLower(cfg.AllowedGroupPrefix)
+	if cfg.AllowedGroupPattern != "" {
+		pattern, err := regexp.Compile(cfg.AllowedGroupPattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid group pattern regex: %w", err)
+		}
+		groupFilterConfig.AllowedPattern = pattern
+	}
+
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+		},
+	}
+
 	return &GitHubOAuth{
-		baseAuth:     baseAuth{encryptionKey: key, logger: logger},
-		oauth2Config: oauth2Cfg,
-		httpClient:   &http.Client{},
+		baseAuth:          baseAuth{encryptionKey: key, logger: logger},
+		oauth2Config:      oauth2Cfg,
+		httpClient:        httpClient,
+		groupFilterConfig: groupFilterConfig,
+		apiBaseURL:        githubAPIBaseURL,
 	}, nil
 }
 
@@ -92,11 +125,40 @@ func (g *GitHubOAuth) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	g.logger.Info("user info fetched", "email", email, "name", name)
 
+	// Fetch team memberships from GitHub API
+	teams, err := g.fetchUserTeams(r.Context(), oauth2Token.AccessToken)
+	if err != nil {
+		g.logger.Error(err, "failed to fetch GitHub team memberships")
+		// When group filtering is configured, team fetch failure is fatal
+		// to prevent silent access degradation
+		if g.groupFilterConfig.AllowedPrefix != "" || g.groupFilterConfig.AllowedPattern != nil {
+			http.Error(w, "failed to verify team membership", http.StatusInternalServerError)
+			return
+		}
+		// Without group filtering, proceed without groups rather than blocking login
+		teams = nil
+	}
+
+	// Apply 3-layer group validation
+	validatedGroups := ValidateAndNormalizeGroups(teams, g.groupFilterConfig, g.logger)
+
+	g.logger.V(1).Info("GitHub teams received",
+		"user", email,
+		"teams", teams,
+		"validated_groups", validatedGroups)
+
+	if len(teams) > 0 && len(validatedGroups) == 0 {
+		g.logger.Info("WARNING: User authenticated but all groups filtered out",
+			"user", email,
+			"original_teams", teams)
+	}
+
 	// Redirect to /auth/complete with the encrypted session token.
 	// The cookie is set there, not here, because some reverse proxies strip
 	// Set-Cookie headers from OAuth callback responses.
 	completeURL, err := g.buildCompleteURL(email, name, func(s *sessionData) {
 		s.AccessToken = oauth2Token.AccessToken
+		s.Groups = validatedGroups
 	})
 	if err != nil {
 		g.logger.Error(err, "failed to build complete URL")
@@ -246,4 +308,113 @@ func (g *GitHubOAuth) fetchPrimaryEmail(accessToken string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no verified email found")
+}
+
+// githubTeamEntry represents a single team from the GitHub /user/teams API.
+type githubTeamEntry struct {
+	Slug string `json:"slug"`
+	Org  struct {
+		Login string `json:"login"`
+	} `json:"organization"`
+}
+
+// fetchTeamPage fetches a single page of teams from the GitHub API.
+// Returns the parsed teams, the next page URL (empty if none), and any error.
+func (g *GitHubOAuth) fetchTeamPage(ctx context.Context, pageURL, accessToken string) ([]githubTeamEntry, string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := g.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			g.logger.Error(err, "failed to close response body")
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("GitHub teams API returned status %d", resp.StatusCode)
+	}
+
+	var page []githubTeamEntry
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return nil, "", fmt.Errorf("failed to decode teams response: %w", err)
+	}
+
+	nextURL := parseNextLink(resp.Header.Get("Link"))
+	return page, nextURL, nil
+}
+
+// fetchUserTeams calls the GitHub API to retrieve the authenticated user's
+// team memberships. Each team is returned in "org-login/team-slug" format.
+// Pagination is followed up to maxGroupsPerUser total teams.
+func (g *GitHubOAuth) fetchUserTeams(ctx context.Context, accessToken string) ([]string, error) {
+	var teams []string
+	nextURL := g.apiBaseURL + "/user/teams?per_page=100"
+
+	for nextURL != "" && len(teams) < maxGroupsPerUser {
+		page, next, err := g.fetchTeamPage(ctx, nextURL, accessToken)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, t := range page {
+			if len(teams) >= maxGroupsPerUser {
+				g.logger.Info("GitHub team count reached limit, truncating",
+					"limit", maxGroupsPerUser)
+				return teams, nil
+			}
+			teams = append(teams, t.Org.Login+"/"+t.Slug)
+		}
+
+		if next != "" && !validateNextURL(next, g.apiBaseURL) {
+			g.logger.Info("Ignoring pagination URL with unexpected host",
+				"url", next, "expected_host", g.apiBaseURL)
+			break
+		}
+		nextURL = next
+	}
+
+	return teams, nil
+}
+
+// parseNextLink extracts the URL for rel="next" from a GitHub Link header.
+// Returns empty string if no next page exists.
+func parseNextLink(linkHeader string) string {
+	if linkHeader == "" {
+		return ""
+	}
+	for _, part := range strings.Split(linkHeader, ",") {
+		part = strings.TrimSpace(part)
+		if !strings.Contains(part, `rel="next"`) {
+			continue
+		}
+		start := strings.Index(part, "<")
+		end := strings.Index(part, ">")
+		if start >= 0 && end > start {
+			return part[start+1 : end]
+		}
+	}
+	return ""
+}
+
+// validateNextURL checks that a pagination URL points to the same host as
+// the configured API base URL. This prevents SSRF via manipulated Link headers
+// that could redirect requests (with the Bearer token) to an attacker-controlled server.
+func validateNextURL(nextURL, apiBaseURL string) bool {
+	parsed, err := url.Parse(nextURL)
+	if err != nil {
+		return false
+	}
+	expected, err := url.Parse(apiBaseURL)
+	if err != nil {
+		return false
+	}
+	return parsed.Host == expected.Host
 }

@@ -112,7 +112,7 @@ func NewOIDCAuth(ctx context.Context, cfg OIDCConfig, logger logr.Logger) (*OIDC
 
 	// Parse group filter pattern if provided
 	var groupFilterConfig GroupFilterConfig
-	groupFilterConfig.AllowedPrefix = cfg.AllowedGroupPrefix
+	groupFilterConfig.AllowedPrefix = strings.ToLower(cfg.AllowedGroupPrefix)
 	if cfg.AllowedGroupPattern != "" {
 		pattern, err := regexp.Compile(cfg.AllowedGroupPattern)
 		if err != nil {

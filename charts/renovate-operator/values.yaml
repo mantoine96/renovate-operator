@@ -184,6 +184,10 @@ auth:
     sessionSecretKey: ""
     # -- optional: GitHub OAuth redirect URL (auto-detected from ingress host if empty)
     redirectUrl: ""
+    # -- optional: only accept groups with this prefix (e.g., "myorg/")
+    allowedGroupPrefix: ""
+    # -- optional: only accept groups matching this regex pattern
+    allowedGroupPattern: ""
 
 rbac:
   # -- if true no clusterrole and clusterrolebinding will be created, only role and rolebinding
