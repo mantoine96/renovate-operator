@@ -208,6 +208,16 @@ func main() {
 			Default:  "",
 		},
 		{
+			Key:      "GITHUB_URL",
+			Optional: true,
+			Default:  "",
+		},
+		{
+			Key:      "GITHUB_ENABLE_TEAMS",
+			Optional: true,
+			Default:  "false",
+		},
+		{
 			Key:      "GITHUB_ALLOWED_GROUP_PREFIX",
 			Optional: true,
 			Default:  "",
@@ -309,6 +319,8 @@ func main() {
 			SessionSecret:       config.GetValue("GITHUB_SESSION_SECRET"),
 			AllowedGroupPrefix:  config.GetValue("GITHUB_ALLOWED_GROUP_PREFIX"),
 			AllowedGroupPattern: config.GetValue("GITHUB_ALLOWED_GROUP_PATTERN"),
+			EnableTeams:         config.GetValue("GITHUB_ENABLE_TEAMS") == "true",
+			URL:                 config.GetValue("GITHUB_URL"),
 		}, ctrl.Log.WithName("github-oauth"))
 		assert.NoError(ghErr, "failed to initialize GitHub OAuth provider")
 		authProvider = ghAuth

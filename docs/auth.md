@@ -82,6 +82,8 @@ auth:
     secretKey: "client-secret"                # Key inside the secret
     sessionSecretKey: ""                      # Optional session encryption key
     redirectUrl: ""                           # Optional: auto-detected from ingress
+    url: ""                                   # Optional: GitHub Enterprise Server URL
+    enableTeams: false                        # Optional: fetch team memberships for group-based authz
 ```
 
 ### Secret
@@ -103,18 +105,36 @@ Create an OAuth App at **GitHub → Settings → Developer settings → OAuth Ap
 https://<your-operator-host>/auth/callback
 ```
 
-The operator requests the `read:user`, `user:email`, and `read:org` scopes. The `read:org` scope is required to fetch team memberships for group-based authorization. On logout, the OAuth token is automatically revoked.
+The operator requests the `read:user` and `user:email` scopes by default. On logout, the OAuth token is automatically revoked.
+
+### GitHub Enterprise Server
+
+To use GitHub Enterprise Server instead of github.com, set the instance URL:
+
+```yaml
+auth:
+  github:
+    url: "https://github.example.com"
+```
+
+The operator will derive the API base URL (`<url>/api/v3`) and OAuth endpoints from this value.
 
 ### Team-Based Authorization
 
-GitHub team memberships are fetched via the GitHub API (`/user/teams`) and mapped to groups in `org-login/team-slug` format (e.g., `myorg/backend-team`). These groups work identically to OIDC groups for authorization purposes.
+To use GitHub team memberships for group-based authorization, set `enableTeams: true`. This adds the `read:org` scope and fetches team memberships via the GitHub API (`/user/teams`). Teams are mapped to groups in `org-login/team-slug` format (e.g., `myorg/backend-team`). These groups work identically to OIDC groups for authorization purposes.
+
+```yaml
+auth:
+  github:
+    enableTeams: true
+```
 
 You can filter which teams are accepted using the same prefix/pattern mechanism as OIDC:
 
 ```yaml
 auth:
   github:
-    # ... other GitHub settings ...
+    enableTeams: true
     allowedGroupPrefix: "myorg/"                   # Only accept teams from "myorg"
     allowedGroupPattern: "^myorg/(team-|platform-)" # Only accept teams matching regex
 ```

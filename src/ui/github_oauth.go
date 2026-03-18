@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,6 +27,8 @@ type GitHubOAuthConfig struct {
 	SessionSecret       string
 	AllowedGroupPrefix  string
 	AllowedGroupPattern string
+	EnableTeams         bool
+	URL                 string // GitHub instance URL for GHE (e.g. "https://github.example.com"); empty means github.com
 }
 
 type GitHubOAuth struct {
@@ -33,15 +37,32 @@ type GitHubOAuth struct {
 	httpClient        *http.Client
 	groupFilterConfig GroupFilterConfig
 	apiBaseURL        string // defaults to githubAPIBaseURL, overridable for tests
+	enableTeams       bool
 }
 
 func NewGitHubOAuth(cfg GitHubOAuthConfig, logger logr.Logger) (*GitHubOAuth, error) {
+	scopes := []string{"read:user", "user:email"}
+	if cfg.EnableTeams {
+		scopes = append(scopes, "read:org")
+	}
+
+	apiBase := githubAPIBaseURL
+	endpoint := github.Endpoint
+	if cfg.URL != "" {
+		instanceURL := strings.TrimRight(cfg.URL, "/")
+		apiBase = instanceURL + "/api/v3"
+		endpoint = oauth2.Endpoint{
+			AuthURL:  instanceURL + "/login/oauth/authorize",
+			TokenURL: instanceURL + "/login/oauth/access_token",
+		}
+	}
+
 	oauth2Cfg := oauth2.Config{
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
 		RedirectURL:  cfg.RedirectURL,
-		Endpoint:     github.Endpoint,
-		Scopes:       []string{"read:user", "user:email", "read:org"},
+		Endpoint:     endpoint,
+		Scopes:       scopes,
 	}
 
 	key, err := newEncryptionKey(cfg.SessionSecret)
@@ -74,7 +95,8 @@ func NewGitHubOAuth(cfg GitHubOAuthConfig, logger logr.Logger) (*GitHubOAuth, er
 		oauth2Config:      oauth2Cfg,
 		httpClient:        httpClient,
 		groupFilterConfig: groupFilterConfig,
-		apiBaseURL:        githubAPIBaseURL,
+		apiBaseURL:        apiBase,
+		enableTeams:       cfg.EnableTeams,
 	}, nil
 }
 
@@ -117,7 +139,7 @@ func (g *GitHubOAuth) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	g.logger.Info("token exchange successful")
 
 	// Fetch user info from GitHub API
-	email, name, err := g.fetchGitHubUser(oauth2Token.AccessToken)
+	email, name, err := g.fetchGitHubUser(r.Context(), oauth2Token.AccessToken)
 	if err != nil {
 		g.logger.Error(err, "failed to fetch GitHub user info")
 		http.Error(w, "failed to fetch user info", http.StatusInternalServerError)
@@ -125,32 +147,29 @@ func (g *GitHubOAuth) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	g.logger.Info("user info fetched", "email", email, "name", name)
 
-	// Fetch team memberships from GitHub API
-	teams, err := g.fetchUserTeams(r.Context(), oauth2Token.AccessToken)
-	if err != nil {
-		g.logger.Error(err, "failed to fetch GitHub team memberships")
-		// When group filtering is configured, team fetch failure is fatal
-		// to prevent silent access degradation
-		if g.groupFilterConfig.AllowedPrefix != "" || g.groupFilterConfig.AllowedPattern != nil {
-			http.Error(w, "failed to verify team membership", http.StatusInternalServerError)
-			return
+	var validatedGroups []string
+	if g.enableTeams {
+		// Fetch team memberships from GitHub API
+		teams, err := g.fetchUserTeams(r.Context(), oauth2Token.AccessToken)
+		if err != nil {
+			g.logger.Error(err, "failed to fetch GitHub team memberships")
+			// When group filtering is configured, team fetch failure is fatal
+			// to prevent silent access degradation
+			if g.groupFilterConfig.AllowedPrefix != "" || g.groupFilterConfig.AllowedPattern != nil {
+				http.Error(w, "failed to verify team membership", http.StatusInternalServerError)
+				return
+			}
+			// Without group filtering, proceed without groups rather than blocking login
+			teams = nil
 		}
-		// Without group filtering, proceed without groups rather than blocking login
-		teams = nil
-	}
 
-	// Apply 3-layer group validation
-	validatedGroups := ValidateAndNormalizeGroups(teams, g.groupFilterConfig, g.logger)
+		// Apply 3-layer group validation
+		validatedGroups = ValidateAndNormalizeGroups(teams, g.groupFilterConfig, g.logger)
 
-	g.logger.V(1).Info("GitHub teams received",
-		"user", email,
-		"teams", teams,
-		"validated_groups", validatedGroups)
-
-	if len(teams) > 0 && len(validatedGroups) == 0 {
-		g.logger.Info("WARNING: User authenticated but all groups filtered out",
+		g.logger.V(1).Info("GitHub teams received",
 			"user", email,
-			"original_teams", teams)
+			"teams", teams,
+			"validated_groups", validatedGroups)
 	}
 
 	// Redirect to /auth/complete with the encrypted session token.
@@ -175,22 +194,23 @@ func (g *GitHubOAuth) HandleComplete(w http.ResponseWriter, r *http.Request) {
 
 func (g *GitHubOAuth) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if session, err := g.getSession(r); err == nil && session.AccessToken != "" {
-		g.revokeGitHubToken(session.AccessToken)
+		g.revokeGitHubToken(r.Context(), session.AccessToken)
 	}
 	g.clearSessionCookie(w)
 	http.Redirect(w, r, "/auth/logged-out", http.StatusFound)
 }
 
-func (g *GitHubOAuth) revokeGitHubToken(accessToken string) {
-	url := fmt.Sprintf("https://api.github.com/applications/%s/token", g.oauth2Config.ClientID)
-	body := fmt.Sprintf(`{"access_token":"%s"}`, accessToken)
-	req, err := http.NewRequest("DELETE", url, strings.NewReader(body))
+func (g *GitHubOAuth) revokeGitHubToken(ctx context.Context, accessToken string) {
+	revokeURL := fmt.Sprintf("%s/applications/%s/token", g.apiBaseURL, g.oauth2Config.ClientID)
+	payload, _ := json.Marshal(map[string]string{"access_token": accessToken})
+	req, err := http.NewRequestWithContext(ctx, "DELETE", revokeURL, bytes.NewReader(payload))
 	if err != nil {
 		g.logger.Error(err, "failed to create token revocation request")
 		return
 	}
 	req.SetBasicAuth(g.oauth2Config.ClientID, g.oauth2Config.ClientSecret)
 	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
@@ -215,11 +235,11 @@ func (g *GitHubOAuth) HandleAuthStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *GitHubOAuth) SupportsGroups() bool {
-	return false
+	return g.enableTeams
 }
 
-func (g *GitHubOAuth) fetchGitHubUser(accessToken string) (email, name string, err error) {
-	req, err := http.NewRequest("GET", "https://api.github.com/user", nil)
+func (g *GitHubOAuth) fetchGitHubUser(ctx context.Context, accessToken string) (email, name string, err error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", g.apiBaseURL+"/user", nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -256,7 +276,7 @@ func (g *GitHubOAuth) fetchGitHubUser(accessToken string) (email, name string, e
 	email = user.Email
 	if email == "" {
 		// Email might be private, try the emails endpoint
-		email, _ = g.fetchPrimaryEmail(accessToken)
+		email, _ = g.fetchPrimaryEmail(ctx, accessToken)
 	}
 	if email == "" {
 		email = user.Login + "@github"
@@ -265,8 +285,8 @@ func (g *GitHubOAuth) fetchGitHubUser(accessToken string) (email, name string, e
 	return email, name, nil
 }
 
-func (g *GitHubOAuth) fetchPrimaryEmail(accessToken string) (string, error) {
-	req, err := http.NewRequest("GET", "https://api.github.com/user/emails", nil)
+func (g *GitHubOAuth) fetchPrimaryEmail(ctx context.Context, accessToken string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", g.apiBaseURL+"/user/emails", nil)
 	if err != nil {
 		return "", err
 	}
@@ -343,7 +363,7 @@ func (g *GitHubOAuth) fetchTeamPage(ctx context.Context, pageURL, accessToken st
 	}
 
 	var page []githubTeamEntry
-	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&page); err != nil {
 		return nil, "", fmt.Errorf("failed to decode teams response: %w", err)
 	}
 
@@ -416,5 +436,5 @@ func validateNextURL(nextURL, apiBaseURL string) bool {
 	if err != nil {
 		return false
 	}
-	return parsed.Host == expected.Host
+	return parsed.Host == expected.Host && parsed.Scheme == expected.Scheme
 }

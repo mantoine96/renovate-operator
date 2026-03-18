@@ -174,6 +174,8 @@ auth:
   github:
     # -- whether to enable GitHub OAuth authentication for the UI (mutually exclusive with OIDC)
     enabled: false
+    # -- GitHub instance URL for GitHub Enterprise Server (e.g. "https://github.example.com"); leave empty for github.com
+    url: ""
     # -- GitHub OAuth App client ID
     clientId: ""
     # -- name of an existing secret containing the GitHub OAuth client secret
@@ -184,9 +186,11 @@ auth:
     sessionSecretKey: ""
     # -- optional: GitHub OAuth redirect URL (auto-detected from ingress host if empty)
     redirectUrl: ""
-    # -- optional: only accept groups with this prefix (e.g., "myorg/")
+    # -- whether to fetch GitHub team memberships for group-based authorization (requires read:org scope)
+    enableTeams: false
+    # -- optional: only accept groups with this prefix (e.g., "myorg/"); requires enableTeams
     allowedGroupPrefix: ""
-    # -- optional: only accept groups matching this regex pattern
+    # -- optional: only accept groups matching this regex pattern; requires enableTeams
     allowedGroupPattern: ""
 
 rbac:

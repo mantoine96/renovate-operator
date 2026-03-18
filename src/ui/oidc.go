@@ -198,12 +198,6 @@ func (o *OIDCAuth) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Apply 3-layer group validation
 	validatedGroups := ValidateAndNormalizeGroups(claims.Groups, o.groupFilterConfig, o.logger)
 
-	if len(claims.Groups) > 0 && len(validatedGroups) == 0 {
-		o.logger.Info("WARNING: User authenticated but all groups filtered out",
-			"user", claims.Email,
-			"original_groups", claims.Groups)
-	}
-
 	completeURL, err := o.buildCompleteURL(claims.Email, claims.Name, func(s *sessionData) {
 		s.Groups = validatedGroups
 	})

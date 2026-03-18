@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/oauth2"
 )
 
 func TestFetchUserTeams(t *testing.T) {
@@ -317,6 +318,12 @@ func TestValidateNextURL(t *testing.T) {
 			apiBaseURL: "https://api.github.com",
 			valid:      false,
 		},
+		{
+			name:       "scheme downgrade rejected",
+			nextURL:    "http://api.github.com/user/teams?page=2",
+			apiBaseURL: "https://api.github.com",
+			valid:      false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -326,5 +333,85 @@ func TestValidateNextURL(t *testing.T) {
 				t.Errorf("validateNextURL(%q, %q) = %v, want %v", tt.nextURL, tt.apiBaseURL, result, tt.valid)
 			}
 		})
+	}
+}
+
+func TestGitHubOAuthSupportsGroups(t *testing.T) {
+	tests := []struct {
+		name        string
+		enableTeams bool
+		want        bool
+	}{
+		{name: "enableTeams true", enableTeams: true, want: true},
+		{name: "enableTeams false", enableTeams: false, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := &GitHubOAuth{enableTeams: tt.enableTeams}
+			if got := g.SupportsGroups(); got != tt.want {
+				t.Errorf("SupportsGroups() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleCallbackTeamFetchFailClosed(t *testing.T) {
+	// Mock GitHub API: /user returns valid user, /user/teams returns 403
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/user":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"login": "testuser",
+				"name":  "Test User",
+				"email": "test@example.com",
+			})
+		case r.URL.Path == "/user/teams":
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	g := &GitHubOAuth{
+		baseAuth:     baseAuth{logger: logr.Discard()},
+		httpClient:   server.Client(),
+		apiBaseURL:   server.URL,
+		enableTeams:  true,
+		oauth2Config: oauth2Config(),
+		groupFilterConfig: GroupFilterConfig{
+			AllowedPrefix: "myorg/",
+		},
+	}
+
+	// We can't easily test HandleCallback end-to-end because it requires a valid
+	// OAuth state cookie and token exchange. Instead, test the individual methods
+	// that comprise the fail-closed behavior.
+
+	// fetchUserTeams should return an error on 403
+	_, err := g.fetchUserTeams(context.Background(), "test-token")
+	if err == nil {
+		t.Fatal("expected error for 403 team fetch response")
+	}
+
+	// Verify fetchGitHubUser works independently (the callback would call this first)
+	email, name, err := g.fetchGitHubUser(context.Background(), "test-token")
+	if err != nil {
+		t.Fatalf("unexpected error fetching user: %v", err)
+	}
+	if email != "test@example.com" {
+		t.Errorf("email = %q, want %q", email, "test@example.com")
+	}
+	if name != "Test User" {
+		t.Errorf("name = %q, want %q", name, "Test User")
+	}
+}
+
+// oauth2Config returns a minimal oauth2.Config for testing.
+func oauth2Config() oauth2.Config {
+	return oauth2.Config{
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret",
 	}
 }
