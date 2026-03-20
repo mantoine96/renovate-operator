@@ -1,0 +1,135 @@
+name: Build & Push (Fork)
+
+on:
+  push:
+    branches:
+      - mantoine/ci-fork-build
+
+env:
+  IMAGE_NAME: ghcr.io/mantoine96/renovate-operator
+  REGISTRY: ghcr.io
+  HELMNAME: renovate-operator
+
+jobs:
+  build-and-push-docker:
+    name: Build & Push Multi-arch Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Calculate version
+        id: version
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          VERSION="0.0.0-oidc-${SHORT_SHA}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Calculated version: $VERSION"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT_HASH=${{ github.sha }}
+            GIT_BRANCH=${{ github.ref_name }}
+            BUILD_TIMESTAMP=${{ github.event.repository.updated_at }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_NAME }}:oidc-latest
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: false
+
+  helm-chart:
+    name: Package & Publish Helm Chart (GitHub Pages)
+    needs: [build-and-push-docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ">=1.25.4"
+
+      - name: Generate CRDs and package chart
+        id: package
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          VERSION="0.0.0-oidc-${SHORT_SHA}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          export GOPATH=$(go env GOPATH)
+          export PATH=$PATH:$GOPATH/bin
+
+          echo "Installing controller-gen"
+          go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+
+          echo "Generating CRDs"
+          controller-gen crd paths=./src/... output:crd:dir=charts/renovate-operator/crd
+
+          echo "Updating Chart.yaml with version $VERSION"
+          sed -i "s/^version:.*/version: $VERSION/" charts/renovate-operator/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: $VERSION/" charts/renovate-operator/Chart.yaml
+
+          echo "Building Helm dependencies"
+          helm dependency build ./charts/renovate-operator
+
+          echo "Packaging Helm chart"
+          mkdir -p /tmp/chart-output
+          helm package -d /tmp/chart-output ./charts/renovate-operator
+
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v6
+        with:
+          ref: gh-pages
+          path: gh-pages
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Helm repo index
+        run: |
+          VERSION="${{ steps.package.outputs.version }}"
+          cp /tmp/chart-output/${{ env.HELMNAME }}-${VERSION}.tgz gh-pages/
+          helm repo index gh-pages --url https://mantoine96.github.io/renovate-operator --merge gh-pages/index.yaml
+
+      - name: Push to gh-pages
+        run: |
+          cd gh-pages
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          git add .
+          git commit -m "chore: publish chart ${{ steps.package.outputs.version }}" || echo "No changes to commit"
+          git push origin gh-pages
