@@ -3,7 +3,7 @@ entries:
   renovate-operator:
   - apiVersion: v2
     appVersion: 0.0.0-oidc-a97e280
-    created: "2026-03-16T15:12:12.238591564Z"
+    created: "2026-03-20T15:32:24.377973681Z"
     description: Chart to deploy the renovate operator to your cluster
     digest: a25f221be1898c02765e0eef8e7476cc7b27c303fdffb621ddc96eaf70c90652
     home: https://mogenius.com
@@ -32,7 +32,7 @@ entries:
     version: 0.0.0-oidc-a97e280
   - apiVersion: v2
     appVersion: 0.0.0-oidc-9ff287e
-    created: "2026-03-16T15:12:12.236952606Z"
+    created: "2026-03-20T15:32:24.376436879Z"
     description: Chart to deploy the renovate operator to your cluster
     digest: f15d1d62ad3a7978725cdfb047fa877308424aa17e40aae4b1fb8dbf3695aaca
     home: https://mogenius.com
@@ -60,8 +60,33 @@ entries:
     - https://mantoine96.github.io/renovate-operator/renovate-operator-0.0.0-oidc-9ff287e.tgz
     version: 0.0.0-oidc-9ff287e
   - apiVersion: v2
+    appVersion: 0.0.0-oidc-7c0f1d3
+    created: "2026-03-20T15:32:24.374878317Z"
+    dependencies:
+    - condition: redis.enabled
+      name: redis
+      repository: oci://registry-1.docker.io/bitnamicharts
+      version: 25.3.5
+    description: Chart to deploy the renovate operator to your cluster
+    digest: 7a5b35e50815e234bc1aefbd3697a0811d2b71e04b7302fb8d8f44cdd7c06ac7
+    home: https://mogenius.com
+    icon: https://avatars.githubusercontent.com/u/92862356
+    maintainers:
+    - email: lukas@mogenius.com
+      name: Lukas Hankeln @mogenius
+      url: https://mogenius.com
+    name: renovate-operator
+    sources:
+    - https://github.com/mogenius/renovate-operator
+    - https://helm.mogenius.com/public
+    - oci://ghcr.io/mogenius/helm-charts/renovate-operator
+    type: application
+    urls:
+    - https://mantoine96.github.io/renovate-operator/renovate-operator-0.0.0-oidc-7c0f1d3.tgz
+    version: 0.0.0-oidc-7c0f1d3
+  - apiVersion: v2
     appVersion: 0.0.0-oidc-788a10a
-    created: "2026-03-16T15:12:12.235337063Z"
+    created: "2026-03-20T15:32:24.365998984Z"
     description: Chart to deploy the renovate operator to your cluster
     digest: 19c77866eff5e3fdc1cfd7d8ba8b5261344e3910027542ca59ad2912c0635a33
     home: https://mogenius.com
@@ -90,7 +115,7 @@ entries:
     version: 0.0.0-oidc-788a10a
   - apiVersion: v2
     appVersion: 0.0.0-oidc-29dc8ba
-    created: "2026-03-16T15:12:12.233178084Z"
+    created: "2026-03-20T15:32:24.364333894Z"
     description: Chart to deploy the renovate operator to your cluster
     digest: 444c233cad1183887d51bb255cd0e6b75d2943912871ee8b5b54823a093fbe80
     home: https://mogenius.com
@@ -117,4 +142,4 @@ entries:
     urls:
     - https://mantoine96.github.io/renovate-operator/renovate-operator-0.0.0-oidc-29dc8ba.tgz
     version: 0.0.0-oidc-29dc8ba
-generated: "2026-03-16T15:12:12.230994547Z"
+generated: "2026-03-20T15:32:24.36249493Z"
